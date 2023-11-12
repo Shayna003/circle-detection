@@ -10,8 +10,12 @@ import javax.swing.*;
 import javax.swing.filechooser.FileNameExtensionFilter;
 
 /**
- * useful resources: https://en.wikipedia.org/wiki/Kernel_(image_processing)
+ * useful resources:
+ * https://en.wikipedia.org/wiki/Kernel_(image_processing)
  * https://en.wikipedia.org/wiki/Circle_Hough_Transform
+ * should use Sobel edge detection instead of simple edge detection for better performance.
+ * right now due to the behaviour of edge detection, will detect 2 concentric circles instead of one.
+ * because hough transformation is computationally intensive, this program only works with small images with a small amount of circles.
  */
 public class CircleDetector extends JFrame
 {
