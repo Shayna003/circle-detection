@@ -33,9 +33,10 @@ public class CircleDetector extends JFrame
   ImageComponent imageComponent;
   ArrayList<Ellipse2D> circles = new ArrayList<>();
   Color circle_color = Color.CYAN;
-  int stroke_size = 5;
+  int stroke_size = 3;
 
   JMenuItem detect;
+  JMenuItem clear;
   JMenuItem blur;
   JMenuItem edgeDetect;
   JMenuItem negative;
@@ -94,24 +95,35 @@ public class CircleDetector extends JFrame
     });
     edit.add(detect);
 
+    clear = new JMenuItem("Clear Circles");
+    clear.addActionListener(event ->
+    {
+      circles.clear();
+      repaint();
+    });
+    edit.add(clear);
+
     blur = new JMenuItem("Gaussian Blur");
     blur.addActionListener(event ->
     {
-      blur(true);
+      image = gaussian_blur(image);
+      repaint();
     });
     edit.add(blur);
 
     edgeDetect = new JMenuItem("Edge Detect");
     edgeDetect.addActionListener(event ->
     {
-      edge_detect(true);
+      image = edge_detect(image);
+      repaint();
     });
     edit.add(edgeDetect);
 
     negative = new JMenuItem("Negative");
     negative.addActionListener(event ->
     {
-      negative(true);
+      image = negative(image);
+      repaint();
     });
     edit.add(negative);
 
@@ -128,12 +140,13 @@ public class CircleDetector extends JFrame
   void detect_circles()
   {
     //circles.clear();
-    boolean applyDirectly = true; // should be false
-    blur(applyDirectly);
-    edge_detect(applyDirectly);
-    negative(applyDirectly);
-    System.out.println(processed_image);
-    ArrayList<CircleHit> hits = houghTransform(applyDirectly);
+    System.out.println("Circle detection started.");
+    processed_image = gaussian_blur(image);
+    processed_image = edge_detect(processed_image);
+    processed_image = negative(processed_image);
+    //System.out.println(processed_image);
+    System.out.println("pre-processing complete.");
+    ArrayList<CircleHit> hits = houghTransform(processed_image);
     Collections.sort(hits, Collections.reverseOrder());
 
     // only take values that are above threshold
@@ -142,6 +155,7 @@ public class CircleDetector extends JFrame
       for (int i = 0; i < hits.size(); i++)
       {
         CircleHit hit = hits.get(i);
+        System.out.println("hit " + i + ": " + hit);
 
         circles.add(new Ellipse2D.Double(hit.x - hit.r, hit.y - hit.r, hit.r * 2, hit.r * 2));
       }
@@ -149,35 +163,44 @@ public class CircleDetector extends JFrame
     }
   }
 
-  void blur(boolean applyDirectly)
+  BufferedImage gaussian_blur(BufferedImage source)
   {
-    /*      float weight = 1.0f / 9.0f;
-      float[] elements = new float[9];
-      for (int i = 0; i < 9; i++)
-        elements[i] = weight;*/
     float[] elements = { 1.0f, 2.0f, 1.0f, 2.0f, 4.f, 2.0f, 1.0f, 2.0f, 1.0f };
     float multiplier = 1.0f / 16.0f;
     for (int i = 0; i < elements.length; i++)
     {
       elements[i] *= multiplier;
     }
-    convolve(elements, applyDirectly);
+    return convolve(elements, source);
   }
 
-  void edge_detect(boolean applyDirectly)
+  BufferedImage edge_detect(BufferedImage source)
   {
     float[] elements = { 0.0f, -1.0f, 0.0f, -1.0f, 4.f, -1.0f, 0.0f, -1.0f, 0.0f };
-    convolve(elements, applyDirectly);
+    return convolve(elements, source);
   }
 
-  void negative(boolean applyDirectly)
+  BufferedImage negative(BufferedImage source)
   {
     short[] negative_values = new short[256];
     for (int i = 0; i < 256; i++)
       negative_values[i] = (short) (255 - i);
     ShortLookupTable table = new ShortLookupTable(0, negative_values);
     LookupOp op = new LookupOp(table, null);
-    filter(op, applyDirectly);
+    return filter(op, source);
+  }
+
+  BufferedImage filter(BufferedImageOp op, BufferedImage source)
+  {
+    if (source == null) return null;
+    return op.filter(source, null);
+  }
+
+  BufferedImage convolve(float[] elements, BufferedImage source)
+  {
+    var kernel = new Kernel(3, 3, elements);
+    var op = new ConvolveOp(kernel);
+    return  filter(op, source);
   }
 
   public void openFile()
@@ -201,43 +224,34 @@ public class CircleDetector extends JFrame
     }
   }
 
-  void filter(BufferedImageOp op, boolean applyDirectly)
-  {
-    if (image == null) return;
-    if (applyDirectly)
-      image = op.filter(image, null);
-    else
-      processed_image = op.filter(image, null);
-    //processed_image = op.filter(img, null);
-    repaint();
-  }
-
-  void convolve(float[] elements, boolean applyDirectly)
-  {
-    var kernel = new Kernel(3, 3, elements);
-    var op = new ConvolveOp(kernel);
-    filter(op, applyDirectly);
-  }
-
   int[][][] accumulator;
-  int min_radius = 10;
+  int min_radius = 6;
   int edge_threshold = 250;// pixel grey value (avg of rgb) must be below (darker) than this value to be considered in hough transform
-  int accumulator_threshold = 10; // threshold for value in accumulator matrix to be considered as a center point of a circle
-  // a point has to be local maxima and above threshold to be considered a circle
+  //double accumulator_threshold = 0.8; // threshold for value in accumulator matrix to be considered as a center point of a circle
+  // a point has to be local maxima and above (threshold * radius) to be considered a circle
 
   int grey_value(int rgb)
   {
     int r = (rgb & 0xff000000) >>> 24;
     int g = (rgb & 0x00ff0000) >>> 16;
     int b = (rgb & 0x0000ff00) >>> 8;
-    //int a = rgb & 0x000000ff;
 
     return((int)((r+g+b)/3.0));
   }
-  ArrayList<CircleHit> houghTransform(boolean applyDirectly)
+
+  /**
+   * Arbitrarily calibrated for different circle  radii
+   */
+  public int threshold_value(int r)
   {
-    System.out.println("houghtransform");
-    BufferedImage img = applyDirectly ? image : processed_image;
+    // 10 * logbase 2(r)
+    double val = Math.max(Math.max(min_radius * Math.PI * 2.5, 40), 13 * (Math.log(r) / Math.log(2)));
+    if (r < 15) val += r * 2.5;
+    return (int) Math.round(val);
+  }
+  ArrayList<CircleHit> houghTransform(BufferedImage img)
+  {
+    System.out.println("performing hough transform...");
     int img_width = img.getWidth();
     int img_height = img.getHeight();
 
@@ -251,29 +265,14 @@ public class CircleDetector extends JFrame
     {
       for (int y = 0; y < img_height; y++)
       {
-        //System.out.println("x=" + x + ", y=" + y + ",grey: " + grey_value(img.getRGB(x, y)));
-        if (grey_value(img.getRGB(x, y)) < edge_threshold)//(img.getRGB(x, y) & 0x000000ff) != 0) // pixel not white
+        if (grey_value(img.getRGB(x, y)) < edge_threshold)
         {
-          //&& y + r <= img_height && x + r <= img_width
-          for (int r = min_radius; r < max_radius; r++)
+          for (int r = min_radius; r < max_radius; r++) // can optimize by using less points/randomized points
           {
-            // optimized. use 5 random points instead of all 360 points.
-/*            for (int i = 0; i < 5; i++)
+            for (int t = 0; t <= 360; t += 4)
             {
-              b = (int) (y - r * Math.sin(t * Math.PI / 180));  //polar coordinate for center (convert to radians)
-              a = (int) (x - r * Math.cos(t * Math.PI / 180)); //polar coordinate for center (convert to radians)
-              if (a >= 0 && a < img_width)
-              {
-                if (b >= 0 && b < img_height)
-                {
-                  accumulator[a][b][r] += 1;
-                }
-              }
-            }*/
-            for (int t = 0; t <= 360; t += 6)
-            {
-              a = (int) Math.round(x - r * Math.cos(t * Math.PI / 180)); //polar coordinate for center (convert to radians)
-              b = (int) Math.round(y - r * Math.sin(t * Math.PI / 180));  //polar coordinate for center (convert to radians)
+              a = (int) Math.round(x - r * Math.cos(t * Math.PI / 180));
+              b = (int) Math.round(y - r * Math.sin(t * Math.PI / 180));
 
               if (a >= 0 && a < img_width)
               {
@@ -287,9 +286,8 @@ public class CircleDetector extends JFrame
         }
       }
     }
+    System.out.println("accumulator matrix computed");
 
-    // normalise and find hough transform image
-    // now normalise to 255 and put in format for a pixel array
     int max = 0;
     int max_r = -1;
     int max_x = -1;
@@ -312,16 +310,16 @@ public class CircleDetector extends JFrame
         }
       }
     }
+    System.out.println("maximum found.");
 
-    ArrayList<CircleHit> hits = new ArrayList<>(); // have to find hits with highest values
+    ArrayList<CircleHit> hits = new ArrayList<>(); // might want to find hits with highest values
     System.out.println("Max :" + max + ", max_r: " + max_r + ", max_x:" + max_x + ", max_y: " + max_y);
-    hits.add(new CircleHit(max_x, max_y, max_r, max));
 
-
-    // Normalise all the values
+    // normalise all the values
     int value;
     int[][] hough_image = new int[img_width][img_height];
-    for (int r = min_radius; r < max_radius; r += 10)
+
+    for (int r = min_radius; r < max_radius; r += 21)
     {
       for (int x = 0; x < img_width; x++)
       {
@@ -329,92 +327,66 @@ public class CircleDetector extends JFrame
         {
           value = (int) (255 - ((double) accumulator[x][y][r] / (double) max) * 255.0);
           hough_image[x][y] = value;
-          //accumulator[x][y][r] = 0xff000000 | (value << 16 | value << 8 | value);
         }
       }
       writeImage(hough_image, "./hough_" + r + ".png");
     }
-    //findMaxima();
+    System.out.println("hough transform images generated");
 
 
-
-    System.out.println("phase 1 complete");
-    //int[][] houghSpace = new int[img_width][img_height];
-
-/*    for (int x = 0; x < img_width; x++)
+    for (int r = min_radius; r < max_radius; r++)
     {
-      for (int y = 0; y < img_height; y++)
+      for (int x = 0; x < img_width; x++)
       {
-        System.out.printf("%5d |", accumulator[x][y][2]);
-        //for (int r = 0; r < max_radius; r++)
-      }
-      System.out.println();
-    }*/
-    //System.out.println(Arrays.toString(accumulator));
-
-    // find local maxima in accumulator array
-
-
-    /*for (int x = 0; x < img_width; x++)
-    {
-      for (int y = 0; y < img_height; y++)
-      {
-        for (int r = min_radius; r < max_radius; r++)
+        for (int y = 0; y < img_height; y++)
         {
-          if (accumulator[x][y][r] < accumulator_threshold) break;
+          if (accumulator[x][y][r] < threshold_value(r)) continue;
+
           boolean has_left = x > 0;
-          boolean has_right = x < img_width-1;
+          boolean has_right = x < img_width - 1;
           boolean has_top = y > 0;
-          boolean has_bottom = y < img_height-1;
+          boolean has_bottom = y < img_height - 1;
 
           if (has_left)
           {
-            if (accumulator[x-1][y][r] > accumulator[x][y][r]) break;
+            if (accumulator[x - 1][y][r] > accumulator[x][y][r]) continue;
             if (has_top)
             {
-              if (accumulator[x-1][y-1][r] > accumulator[x][y][r]) break;
+              if (accumulator[x - 1][y - 1][r] > accumulator[x][y][r]) continue;
             }
             if (has_bottom)
             {
-              if (accumulator[x-1][y+1][r] > accumulator[x][y][r]) break;
+              if (accumulator[x - 1][y + 1][r] > accumulator[x][y][r]) continue;
             }
           }
 
           if (has_right)
           {
-            if (accumulator[x+1][y][r] > accumulator[x][y][r]) break;
+            if (accumulator[x + 1][y][r] > accumulator[x][y][r]) continue;
             if (has_top)
             {
-              if (accumulator[x+1][y-1][r] > accumulator[x][y][r]) break;
+              if (accumulator[x + 1][y - 1][r] > accumulator[x][y][r]) continue;
             }
             if (has_bottom)
             {
-              if (accumulator[x+1][y+1][r] > accumulator[x][y][r]) break;
+              if (accumulator[x + 1][y + 1][r] > accumulator[x][y][r]) continue;
             }
           }
 
           if (has_top)
           {
-            if (accumulator[x][y-1][r] > accumulator[x][y][r]) break;
+            if (accumulator[x][y - 1][r] > accumulator[x][y][r]) continue;
           }
           if (has_bottom)
           {
-            if (accumulator[x][y+1][r] > accumulator[x][y][r]) break;
+            if (accumulator[x][y + 1][r] > accumulator[x][y][r]) continue;
           }
-
-          if (accumulator[x][y][r] < accumulator_threshold)
-          {
-            //System.out.println("smaller than 10: " + accumulator[x][y][r]);
-            break;
-          }
-
           hits.add(new CircleHit(x, y, r, accumulator[x][y][r]));
-          //circles.add(new Ellipse2D.Double(x - r-1, y - r-1, (r+1) * 2, (r+1) * 2));
-          //System.out.println("new circle detected: " + "x=" + x + ", y=" + y + ", r=" + r);
         }
       }
-    }*/
-    System.out.println("phase 2 complete");
+    }
+
+    System.out.println("local maximas found.");
     return hits;
   }
 
@@ -455,6 +427,12 @@ public class CircleDetector extends JFrame
     public int compareTo(CircleHit other)
     {
       return this.val - other.val;
+    }
+
+    @Override
+    public String toString()
+    {
+      return String.format("x=%2d y=%2d r=%2d val=%2d", x, y, r, val);
     }
   }
 }
